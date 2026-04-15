@@ -1,0 +1,146 @@
+
+@import "tailwindcss";
+
+.form-select {
+  width: 100%;
+  border: 1px solid #d7dce5;
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 12px 14px;
+  outline: none;
+  font: inherit;
+}
+
+.form-select:focus {
+  border-color: #7c5cff;
+  box-shadow: 0 0 0 3px rgba(124, 92, 255, 0.12);
+}
+
+.tab-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.tab-button {
+  background: #eef2ff;
+  color: #4338ca;
+  padding: 10px 16px;
+  border-radius: 12px;
+  font-weight: 700;
+}
+
+.tab-button.active {
+  background: #7c5cff;
+  color: #ffffff;
+}
+
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.project-item {
+  border: 1px solid #e7ebf3;
+  border-radius: 16px;
+  padding: 16px;
+  background: #fbfcff;
+}
+
+.project-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.project-item-top h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.project-client-name {
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 14px;
+}
+
+.project-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.project-meta-grid > div,
+.project-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-block {
+  margin-top: 12px;
+}
+
+.project-block p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.status-inquiry {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.status-quoted {
+  background: #eff8ff;
+  color: #175cd3;
+}
+
+.status-ordered {
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.status-in_progress {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.status-delivered {
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.status-closed {
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+.status-cancelled {
+  background: #fef2f2;
+  color: #b42318;
+}
+
+@media (max-width: 920px) {
+  .project-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tab-bar {
+    flex-wrap: wrap;
+  }
+}
