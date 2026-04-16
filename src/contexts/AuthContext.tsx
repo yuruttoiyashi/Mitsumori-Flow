@@ -12,19 +12,12 @@ import {
   signOut,
   type User,
 } from "firebase/auth";
-import {
-  doc,
-  getDoc,
-  setDoc,
-  updateDoc,
-  serverTimestamp,
-} from "firebase/firestore";
-import { auth, db, googleProvider } from "../lib/firebase";
+import { auth, googleProvider } from "../lib/firebase";
 
 type AuthContextType = {
   user: User | null;
   loading: boolean;
-  signInWithGoogle: () => Promise<void>;
+  loginWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -34,30 +27,6 @@ type AuthProviderProps = {
   children: ReactNode;
 };
 
-async function syncUserProfile(firebaseUser: User) {
-  try {
-    const userRef = doc(db, "users", firebaseUser.uid);
-    const userSnap = await getDoc(userRef);
-
-    if (!userSnap.exists()) {
-      await setDoc(userRef, {
-        displayName: firebaseUser.displayName ?? "",
-        email: firebaseUser.email ?? "",
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await updateDoc(userRef, {
-        displayName: firebaseUser.displayName ?? "",
-        email: firebaseUser.email ?? "",
-        updatedAt: serverTimestamp(),
-      });
-    }
-  } catch (error) {
-    console.error("User profile sync error:", error);
-  }
-}
-
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -66,16 +35,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       setLoading(false);
-
-      if (firebaseUser) {
-        void syncUserProfile(firebaseUser);
-      }
     });
 
-    return () => unsubscribe();
+    return unsubscribe;
   }, []);
 
-  const signInWithGoogle = async () => {
+  const loginWithGoogle = async () => {
     await signInWithPopup(auth, googleProvider);
   };
 
@@ -83,11 +48,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     await signOut(auth);
   };
 
-  const value = useMemo(
+  const value = useMemo<AuthContextType>(
     () => ({
       user,
       loading,
-      signInWithGoogle,
+      loginWithGoogle,
       logout,
     }),
     [user, loading]
@@ -96,7 +61,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-export function useAuth() {
+export const useAuth = () => {
   const context = useContext(AuthContext);
 
   if (!context) {
@@ -104,4 +69,6 @@ export function useAuth() {
   }
 
   return context;
-}
+};
+
+export default useAuth;

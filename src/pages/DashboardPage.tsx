@@ -1,716 +1,454 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  collection,
-  getDocs,
-  limit,
-  orderBy,
-  query,
-  where,
-} from "firebase/firestore";
-import { db } from "../lib/firebase";
+import { Link } from "react-router-dom";
+import * as quoteService from "../services/quoteService";
 import { useAuth } from "../contexts/AuthContext";
-import type { Client } from "../types/client";
-import {
-  PROJECT_STATUS_OPTIONS,
-  type Project,
-  type ProjectStatus,
-} from "../types/project";
-import {
-  PROJECT_UPDATE_TYPE_OPTIONS,
-  type ProjectUpdate,
-  type ProjectUpdateType,
-} from "../types/projectUpdate";
 
-type DashboardUpdateItem = ProjectUpdate & {
-  projectId: string;
-  projectTitle: string;
-  clientName: string;
+type QuoteLike = {
+  id?: string;
+  quoteNumber?: string;
+  projectName?: string;
+  subject?: string;
+  title?: string;
+  shipperCompany?: string;
+  companyName?: string;
+  clientCompany?: string;
+  customerCompany?: string;
+  shipperContactName?: string;
+  customerName?: string;
+  contactName?: string;
+  totalAmount?: number;
+  total?: number;
+  grandTotal?: number;
+  status?: string;
+  issueDate?: string;
+  validUntil?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 };
 
-function getSeconds(value: unknown) {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "seconds" in value &&
-    typeof value.seconds === "number"
-  ) {
-    return value.seconds;
-  }
+type MetricCardProps = {
+  title: string;
+  value: string;
+  sub: string;
+};
 
-  return 0;
+function MetricCard({ title, value, sub }: MetricCardProps) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="text-sm font-medium text-slate-500">{title}</div>
+      <div className="mt-2 text-3xl font-bold tracking-tight text-slate-900">{value}</div>
+      <div className="mt-2 text-xs text-slate-500">{sub}</div>
+    </div>
+  );
 }
 
-function getDateTime(value: unknown) {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "toDate" in value &&
-    typeof value.toDate === "function"
-  ) {
-    return (value.toDate() as Date).getTime();
+function toDateValue(value: unknown): Date | null {
+  if (!value) return null;
+
+  if (value instanceof Date) return value;
+
+  if (typeof value === "string" || typeof value === "number") {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  if (typeof value === "object" && value !== null) {
+    const maybeTimestamp = value as { toDate?: () => Date; seconds?: number };
+    if (typeof maybeTimestamp.toDate === "function") {
+      return maybeTimestamp.toDate();
+    }
+    if (typeof maybeTimestamp.seconds === "number") {
+      return new Date(maybeTimestamp.seconds * 1000);
+    }
   }
 
   return null;
 }
 
-function formatAmount(value: number) {
-  return `¥${Number(value || 0).toLocaleString("ja-JP")}`;
-}
-
 function formatDate(value: unknown) {
-  if (!value) return "-";
+  const date = toDateValue(value);
+  if (!date) return "-";
 
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "toDate" in value &&
-    typeof value.toDate === "function"
-  ) {
-    const date = value.toDate() as Date;
-    return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`;
-  }
-
-  return "-";
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
 }
 
-function formatDateTime(value: unknown) {
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "toDate" in value &&
-    typeof value.toDate === "function"
-  ) {
-    const date = value.toDate() as Date;
-    return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${String(
-      date.getHours()
-    ).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-  }
-
-  return "-";
+function formatCurrency(value: number) {
+  return new Intl.NumberFormat("ja-JP", {
+    style: "currency",
+    currency: "JPY",
+    maximumFractionDigits: 0,
+  }).format(value || 0);
 }
 
-function getStatusLabel(status: ProjectStatus) {
+function getProjectName(quote: QuoteLike) {
+  return quote.projectName || quote.subject || quote.title || "案件名未設定";
+}
+
+function getCompanyName(quote: QuoteLike) {
   return (
-    PROJECT_STATUS_OPTIONS.find((item) => item.value === status)?.label ?? status
+    quote.shipperCompany ||
+    quote.companyName ||
+    quote.clientCompany ||
+    quote.customerCompany ||
+    "荷主企業未設定"
   );
 }
 
-function getStatusClassName(status: ProjectStatus) {
-  switch (status) {
-    case "inquiry":
-      return "bg-indigo-100 text-indigo-700";
-    case "quoted":
-      return "bg-sky-100 text-sky-700";
-    case "ordered":
-      return "bg-emerald-100 text-emerald-700";
-    case "in_progress":
-      return "bg-amber-100 text-amber-700";
-    case "delivered":
-      return "bg-violet-100 text-violet-700";
-    case "closed":
-      return "bg-green-100 text-green-700";
-    case "cancelled":
-      return "bg-rose-100 text-rose-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
+function getContactName(quote: QuoteLike) {
+  return quote.shipperContactName || quote.customerName || quote.contactName || "-";
 }
 
-function getStatusBarClassName(status: ProjectStatus) {
-  switch (status) {
-    case "inquiry":
-      return "bg-indigo-500";
-    case "quoted":
-      return "bg-sky-500";
-    case "ordered":
-      return "bg-emerald-500";
-    case "in_progress":
-      return "bg-amber-500";
-    case "delivered":
-      return "bg-violet-500";
-    case "closed":
-      return "bg-green-600";
-    case "cancelled":
-      return "bg-rose-500";
-    default:
-      return "bg-slate-500";
-  }
+function getQuoteTotal(quote: QuoteLike) {
+  return Number(quote.totalAmount ?? quote.total ?? quote.grandTotal ?? 0);
 }
 
-function getUpdateTypeLabel(type: ProjectUpdateType) {
-  return (
-    PROJECT_UPDATE_TYPE_OPTIONS.find((item) => item.value === type)?.label ?? type
-  );
+function getQuoteBaseDate(quote: QuoteLike) {
+  return quote.issueDate || quote.createdAt || quote.updatedAt;
 }
 
-function getUpdateTypeClassName(type: ProjectUpdateType) {
-  switch (type) {
-    case "estimate_sent":
-      return "bg-sky-100 text-sky-700";
-    case "first_draft":
-      return "bg-indigo-100 text-indigo-700";
-    case "revision":
-      return "bg-amber-100 text-amber-700";
-    case "delivered":
-      return "bg-emerald-100 text-emerald-700";
-    case "note":
-      return "bg-slate-100 text-slate-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
+function normalizeStatus(raw?: string) {
+  const value = (raw || "").toLowerCase();
+
+  if (["approved", "sent", "submitted"].includes(value)) return "提出済み";
+  if (["draft", "editing", ""].includes(value)) return "下書き";
+  if (["expired"].includes(value)) return "期限切れ";
+  if (["cancelled", "canceled"].includes(value)) return "取消";
+  return "登録済み";
+}
+
+function getStatusBadgeClass(status: string) {
+  if (status === "提出済み") return "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200";
+  if (status === "期限切れ") return "bg-amber-50 text-amber-700 ring-1 ring-amber-200";
+  if (status === "取消") return "bg-rose-50 text-rose-700 ring-1 ring-rose-200";
+  if (status === "下書き") return "bg-slate-100 text-slate-700 ring-1 ring-slate-200";
+  return "bg-sky-50 text-sky-700 ring-1 ring-sky-200";
 }
 
 export default function DashboardPage() {
   const { user } = useAuth();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [recentUpdates, setRecentUpdates] = useState<DashboardUpdateItem[]>([]);
+  const [quotes, setQuotes] = useState<QuoteLike[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
-  const fetchDashboardData = async () => {
-    if (!user?.uid) {
-      setProjects([]);
-      setClients([]);
-      setRecentUpdates([]);
-      setLoading(false);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError("");
-
-      const [projectsSnapshot, clientsSnapshot] = await Promise.all([
-        getDocs(
-          query(collection(db, "projects"), where("userId", "==", user.uid))
-        ),
-        getDocs(
-          query(collection(db, "clients"), where("userId", "==", user.uid))
-        ),
-      ]);
-
-      const projectList: Project[] = projectsSnapshot.docs.map((docItem) => {
-        const data = docItem.data();
-
-        return {
-          id: docItem.id,
-          userId: data.userId ?? "",
-          clientId: data.clientId ?? "",
-          title: data.title ?? "",
-          description: data.description ?? "",
-          status: (data.status ?? "inquiry") as ProjectStatus,
-          estimateAmount: Number(data.estimateAmount ?? 0),
-          finalAmount: Number(data.finalAmount ?? 0),
-          inquiryDate: data.inquiryDate ?? null,
-          dueDate: data.dueDate ?? null,
-          deliveryDate: data.deliveryDate ?? null,
-          quoteNote: data.quoteNote ?? "",
-          internalNote: data.internalNote ?? "",
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt,
-        };
-      });
-
-      const clientList: Client[] = clientsSnapshot.docs.map((docItem) => {
-        const data = docItem.data();
-
-        return {
-          id: docItem.id,
-          userId: data.userId ?? "",
-          name: data.name ?? "",
-          companyName: data.companyName ?? "",
-          email: data.email ?? "",
-          phone: data.phone ?? "",
-          memo: data.memo ?? "",
-          createdAt: data.createdAt,
-          updatedAt: data.updatedAt,
-        };
-      });
-
-      projectList.sort((a, b) => getSeconds(b.createdAt) - getSeconds(a.createdAt));
-      clientList.sort((a, b) => a.name.localeCompare(b.name, "ja"));
-
-      const updateResults = await Promise.all(
-        projectList.map(async (project) => {
-          const snapshot = await getDocs(
-            query(
-              collection(db, "projects", project.id, "updates"),
-              orderBy("createdAt", "desc"),
-              limit(3)
-            )
-          );
-
-          const clientName =
-            clientList.find((client) => client.id === project.clientId)?.name ??
-            "不明な顧客";
-
-          return snapshot.docs.map((docItem) => {
-            const data = docItem.data();
-
-            return {
-              id: docItem.id,
-              userId: data.userId ?? "",
-              type: (data.type ?? "note") as ProjectUpdateType,
-              body: data.body ?? "",
-              createdAt: data.createdAt,
-              projectId: project.id,
-              projectTitle: project.title,
-              clientName,
-            } satisfies DashboardUpdateItem;
-          });
-        })
-      );
-
-      const mergedUpdates = updateResults
-        .flat()
-        .sort((a, b) => getSeconds(b.createdAt) - getSeconds(a.createdAt))
-        .slice(0, 8);
-
-      setProjects(projectList);
-      setClients(clientList);
-      setRecentUpdates(mergedUpdates);
-    } catch (err) {
-      console.error(err);
-      setError("ダッシュボード情報の取得に失敗しました。");
-    } finally {
-      setLoading(false);
-    }
-  };
+  useEffect(() => {
+    document.title = "ダッシュボード | Mitsumori Flow";
+  }, []);
 
   useEffect(() => {
-    void fetchDashboardData();
-  }, [user?.uid]);
+    const loadQuotes = async () => {
+      try {
+        setLoading(true);
+        setError("");
 
-  const stats = useMemo(() => {
-    const totalClients = clients.length;
-    const totalProjects = projects.length;
+        const service = quoteService as Record<string, unknown>;
+        const getQuotesFn =
+          (service.getQuotes as ((uid?: string) => Promise<unknown>) | undefined) ||
+          (service.fetchQuotes as ((uid?: string) => Promise<unknown>) | undefined) ||
+          (service.listQuotes as ((uid?: string) => Promise<unknown>) | undefined) ||
+          (service.getAllQuotes as ((uid?: string) => Promise<unknown>) | undefined);
 
-    const inquiryCount = projects.filter(
-      (project) => project.status === "inquiry" || project.status === "quoted"
-    ).length;
-
-    const inProgressCount = projects.filter(
-      (project) => project.status === "ordered" || project.status === "in_progress"
-    ).length;
-
-    const completedCount = projects.filter(
-      (project) => project.status === "delivered" || project.status === "closed"
-    ).length;
-
-    const cancelledCount = projects.filter(
-      (project) => project.status === "cancelled"
-    ).length;
-
-    const totalEstimateAmount = projects.reduce(
-      (sum, project) => sum + Number(project.estimateAmount || 0),
-      0
-    );
-
-    const totalFinalAmount = projects.reduce(
-      (sum, project) => sum + Number(project.finalAmount || 0),
-      0
-    );
-
-    const now = new Date();
-    const oneWeekLater = new Date();
-    oneWeekLater.setDate(now.getDate() + 7);
-
-    const dueSoonCount = projects.filter((project) => {
-      if (
-        project.status === "closed" ||
-        project.status === "cancelled" ||
-        project.status === "delivered"
-      ) {
-        return false;
-      }
-
-      const dueTime = getDateTime(project.dueDate);
-      if (!dueTime) return false;
-
-      return dueTime >= now.getTime() && dueTime <= oneWeekLater.getTime();
-    }).length;
-
-    return {
-      totalClients,
-      totalProjects,
-      inquiryCount,
-      inProgressCount,
-      completedCount,
-      cancelledCount,
-      totalEstimateAmount,
-      totalFinalAmount,
-      dueSoonCount,
-    };
-  }, [clients, projects]);
-
-  const statusChartData = useMemo(() => {
-    const counts = PROJECT_STATUS_OPTIONS.map((option) => {
-      const count = projects.filter((project) => project.status === option.value).length;
-      return {
-        status: option.value,
-        label: option.label,
-        count,
-      };
-    });
-
-    const maxCount = Math.max(...counts.map((item) => item.count), 1);
-
-    return {
-      counts,
-      maxCount,
-    };
-  }, [projects]);
-
-  const recentProjects = useMemo(() => {
-    return [...projects]
-      .sort((a, b) => getSeconds(b.createdAt) - getSeconds(a.createdAt))
-      .slice(0, 5);
-  }, [projects]);
-
-  const dueSoonProjects = useMemo(() => {
-    const now = new Date();
-    const oneWeekLater = new Date();
-    oneWeekLater.setDate(now.getDate() + 7);
-
-    return [...projects]
-      .filter((project) => {
-        if (
-          project.status === "closed" ||
-          project.status === "cancelled" ||
-          project.status === "delivered"
-        ) {
-          return false;
+        if (!getQuotesFn) {
+          throw new Error("quoteService.ts に見積一覧取得関数が見つかりません。");
         }
 
-        const dueTime = getDateTime(project.dueDate);
-        if (!dueTime) return false;
+        const result = await getQuotesFn(user?.uid);
 
-        return dueTime >= now.getTime() && dueTime <= oneWeekLater.getTime();
-      })
+        const normalized = Array.isArray(result)
+          ? result
+          : Array.isArray((result as { quotes?: unknown[] })?.quotes)
+          ? ((result as { quotes?: unknown[] }).quotes ?? [])
+          : [];
+
+        setQuotes(normalized as QuoteLike[]);
+      } catch (err) {
+        console.error(err);
+        setError("ダッシュボード用データの取得に失敗しました。");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    void loadQuotes();
+  }, [user?.uid]);
+
+  const metrics = useMemo(() => {
+    const now = new Date();
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    const totalCount = quotes.length;
+    const totalAmount = quotes.reduce((sum, quote) => sum + getQuoteTotal(quote), 0);
+
+    const thisMonthQuotes = quotes.filter((quote) => {
+      const date = toDateValue(getQuoteBaseDate(quote));
+      if (!date) return false;
+      return date.getFullYear() === currentYear && date.getMonth() === currentMonth;
+    });
+
+    const thisMonthCount = thisMonthQuotes.length;
+    const thisMonthAmount = thisMonthQuotes.reduce((sum, quote) => sum + getQuoteTotal(quote), 0);
+    const avgAmount = totalCount > 0 ? Math.round(totalAmount / totalCount) : 0;
+
+    return {
+      totalCount,
+      totalAmount,
+      thisMonthCount,
+      thisMonthAmount,
+      avgAmount,
+    };
+  }, [quotes]);
+
+  const recentQuotes = useMemo(() => {
+    return [...quotes]
       .sort((a, b) => {
-        const aTime = getDateTime(a.dueDate) ?? Number.MAX_SAFE_INTEGER;
-        const bTime = getDateTime(b.dueDate) ?? Number.MAX_SAFE_INTEGER;
-        return aTime - bTime;
+        const dateA = toDateValue(getQuoteBaseDate(a))?.getTime() ?? 0;
+        const dateB = toDateValue(getQuoteBaseDate(b))?.getTime() ?? 0;
+        return dateB - dateA;
       })
-      .slice(0, 5);
-  }, [projects]);
+      .slice(0, 6);
+  }, [quotes]);
 
-  const getClientName = (clientId: string) => {
-    return clients.find((client) => client.id === clientId)?.name ?? "不明な顧客";
-  };
+  const statusSummary = useMemo(() => {
+    const summary = new Map<string, number>();
 
-  const summaryCards = [
-    {
-      label: "顧客数",
-      value: `${stats.totalClients}件`,
-      tone: "bg-slate-50 border-slate-200 text-slate-900",
-    },
-    {
-      label: "総案件数",
-      value: `${stats.totalProjects}件`,
-      tone: "bg-slate-50 border-slate-200 text-slate-900",
-    },
-    {
-      label: "問い合わせ・見積中",
-      value: `${stats.inquiryCount}件`,
-      tone: "bg-indigo-50 border-indigo-200 text-indigo-700",
-    },
-    {
-      label: "進行中",
-      value: `${stats.inProgressCount}件`,
-      tone: "bg-amber-50 border-amber-200 text-amber-700",
-    },
-    {
-      label: "完了・納品済み",
-      value: `${stats.completedCount}件`,
-      tone: "bg-emerald-50 border-emerald-200 text-emerald-700",
-    },
-    {
-      label: "キャンセル",
-      value: `${stats.cancelledCount}件`,
-      tone: "bg-rose-50 border-rose-200 text-rose-700",
-    },
-    {
-      label: "見積総額",
-      value: formatAmount(stats.totalEstimateAmount),
-      tone: "bg-sky-50 border-sky-200 text-sky-700",
-    },
-    {
-      label: "受注総額",
-      value: formatAmount(stats.totalFinalAmount),
-      tone: "bg-violet-50 border-violet-200 text-violet-700",
-    },
-    {
-      label: "7日以内の納期",
-      value: `${stats.dueSoonCount}件`,
-      tone: "bg-orange-50 border-orange-200 text-orange-700",
-    },
-  ];
+    for (const quote of quotes) {
+      const status = normalizeStatus(quote.status);
+      summary.set(status, (summary.get(status) ?? 0) + 1);
+    }
+
+    return Array.from(summary.entries()).sort((a, b) => b[1] - a[1]);
+  }, [quotes]);
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <p className="text-sm font-medium text-slate-500">業務ダッシュボード</p>
+          <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
+            物流見積管理ダッシュボード
+          </h1>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div
+              key={index}
+              className="h-32 animate-pulse rounded-2xl border border-slate-200 bg-white"
+            />
+          ))}
+        </div>
+
+        <div className="h-80 animate-pulse rounded-2xl border border-slate-200 bg-white" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-3xl font-bold text-slate-900">ダッシュボード</h2>
-        <p className="mt-2 text-slate-600">
-          顧客・案件・金額・納期状況をまとめて確認できます。
-        </p>
-      </div>
+      <section className="rounded-3xl border border-slate-200 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 p-6 text-white shadow-sm">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-300">業務ダッシュボード</p>
+            <h1 className="mt-2 text-3xl font-bold tracking-tight">
+              物流見積管理ダッシュボード
+            </h1>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-300">
+              見積の登録件数・総額・月次動向を一覧で確認できます。
+              日々の見積対応状況を把握しやすい、提出向けの業務管理画面です。
+            </p>
+          </div>
 
-      {error && (
+          <div className="flex flex-wrap gap-3">
+            <Link
+              to="/quotes"
+              className="inline-flex items-center justify-center rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/15"
+            >
+              物流見積一覧へ
+            </Link>
+            <Link
+              to="/quotes/new"
+              className="inline-flex items-center justify-center rounded-xl bg-sky-400 px-4 py-2 text-sm font-semibold text-slate-900 transition hover:bg-sky-300"
+            >
+              新規見積を作成
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {error}
         </div>
-      )}
+      ) : null}
 
-      {loading ? (
-        <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-200">
-          <p className="text-slate-600">読み込み中...</p>
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard
+          title="総案件見積数"
+          value={String(metrics.totalCount)}
+          sub="登録されている全見積件数"
+        />
+        <MetricCard
+          title="今月登録件数"
+          value={String(metrics.thisMonthCount)}
+          sub="当月に作成・登録された見積"
+        />
+        <MetricCard
+          title="運送見積総額"
+          value={formatCurrency(metrics.totalAmount)}
+          sub="登録済み見積の総額"
+        />
+        <MetricCard
+          title="見積平均単価"
+          value={formatCurrency(metrics.avgAmount)}
+          sub="1案件あたりの平均見積額"
+        />
+      </section>
+
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-[1.5fr_1fr]">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900">最近の物流見積</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                最新の見積登録状況を上から確認できます。
+              </p>
+            </div>
+            <Link
+              to="/quotes"
+              className="text-sm font-semibold text-slate-700 underline-offset-4 hover:underline"
+            >
+              すべて見る
+            </Link>
+          </div>
+
+          {recentQuotes.length === 0 ? (
+            <div className="px-5 py-10 text-center text-sm text-slate-500">
+              まだ見積データがありません。新規作成またはCSV取込を実行してください。
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-slate-500">
+                  <tr>
+                    <th className="px-5 py-3 font-semibold">案件名</th>
+                    <th className="px-5 py-3 font-semibold">荷主企業</th>
+                    <th className="px-5 py-3 font-semibold">荷主担当者</th>
+                    <th className="px-5 py-3 font-semibold">見積金額</th>
+                    <th className="px-5 py-3 font-semibold">登録日</th>
+                    <th className="px-5 py-3 font-semibold">状態</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {recentQuotes.map((quote) => {
+                    const status = normalizeStatus(quote.status);
+
+                    return (
+                      <tr key={quote.id ?? `${getProjectName(quote)}-${getCompanyName(quote)}`}>
+                        <td className="px-5 py-4 font-medium text-slate-900">
+                          {getProjectName(quote)}
+                        </td>
+                        <td className="px-5 py-4 text-slate-700">{getCompanyName(quote)}</td>
+                        <td className="px-5 py-4 text-slate-700">{getContactName(quote)}</td>
+                        <td className="px-5 py-4 font-semibold text-slate-900">
+                          {formatCurrency(getQuoteTotal(quote))}
+                        </td>
+                        <td className="px-5 py-4 text-slate-700">
+                          {formatDate(getQuoteBaseDate(quote))}
+                        </td>
+                        <td className="px-5 py-4">
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClass(
+                              status
+                            )}`}
+                          >
+                            {status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
-      ) : (
-        <>
-          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="mb-5">
-              <h3 className="text-2xl font-bold text-slate-900">集計カード</h3>
-              <p className="mt-2 text-sm text-slate-600">
-                全体の件数と金額をひと目で確認できます。
-              </p>
-            </div>
 
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {summaryCards.map((card) => (
-                <div
-                  key={card.label}
-                  className={`rounded-3xl border p-5 ${card.tone}`}
-                >
-                  <p className="text-sm font-semibold">{card.label}</p>
-                  <p className="mt-3 text-2xl font-bold">{card.value}</p>
+        <div className="space-y-6">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">月次サマリー</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              今月の活動量と見積金額の目安です。
+            </p>
+
+            <div className="mt-5 space-y-4">
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="text-sm text-slate-500">今月登録件数</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {metrics.thisMonthCount} 件
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="mb-5">
-              <h3 className="text-2xl font-bold text-slate-900">ステータス別グラフ</h3>
-              <p className="mt-2 text-sm text-slate-600">
-                案件のステータス分布を簡易グラフで確認できます。
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              {statusChartData.counts.map((item) => {
-                const widthPercent =
-                  statusChartData.maxCount === 0
-                    ? 0
-                    : (item.count / statusChartData.maxCount) * 100;
-
-                return (
-                  <div key={item.status} className="space-y-2">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-2">
-                        <span
-                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getStatusClassName(
-                            item.status
-                          )}`}
-                        >
-                          {item.label}
-                        </span>
-                      </div>
-                      <span className="text-sm font-semibold text-slate-700">
-                        {item.count}件
-                      </span>
-                    </div>
-
-                    <div className="h-3 w-full overflow-hidden rounded-full bg-slate-100">
-                      <div
-                        className={`h-full rounded-full ${getStatusBarClassName(
-                          item.status
-                        )}`}
-                        style={{ width: `${widthPercent}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          <div className="grid gap-6 xl:grid-cols-2">
-            <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-              <div className="mb-5">
-                <h3 className="text-2xl font-bold text-slate-900">最近の案件</h3>
-                <p className="mt-2 text-sm text-slate-600">
-                  直近で追加された案件を表示します。
-                </p>
               </div>
 
-              {recentProjects.length === 0 ? (
-                <p className="text-slate-600">案件がまだありません。</p>
-              ) : (
-                <div className="space-y-4">
-                  {recentProjects.map((project) => (
-                    <div
-                      key={project.id}
-                      className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
-                    >
-                      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <h4 className="text-lg font-bold text-slate-900">
-                            {project.title}
-                          </h4>
-                          <p className="mt-1 text-sm text-slate-600">
-                            顧客: {getClientName(project.clientId)}
-                          </p>
-                        </div>
-
-                        <span
-                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getStatusClassName(
-                            project.status
-                          )}`}
-                        >
-                          {getStatusLabel(project.status)}
-                        </span>
-                      </div>
-
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <p className="text-xs font-bold tracking-wide text-slate-500">
-                            見積金額
-                          </p>
-                          <p className="text-slate-800">
-                            {formatAmount(project.estimateAmount)}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs font-bold tracking-wide text-slate-500">
-                            問い合わせ日
-                          </p>
-                          <p className="text-slate-800">
-                            {formatDate(project.inquiryDate)}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="text-sm text-slate-500">今月見積総額</div>
+                <div className="mt-1 text-2xl font-bold text-slate-900">
+                  {formatCurrency(metrics.thisMonthAmount)}
                 </div>
-              )}
-            </div>
-
-            <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-              <div className="mb-5">
-                <h3 className="text-2xl font-bold text-slate-900">納期が近い案件</h3>
-                <p className="mt-2 text-sm text-slate-600">
-                  7日以内に納期が来る案件を表示します。
-                </p>
               </div>
-
-              {dueSoonProjects.length === 0 ? (
-                <p className="text-slate-600">7日以内の納期案件はありません。</p>
-              ) : (
-                <div className="space-y-4">
-                  {dueSoonProjects.map((project) => (
-                    <div
-                      key={project.id}
-                      className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
-                    >
-                      <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <h4 className="text-lg font-bold text-slate-900">
-                            {project.title}
-                          </h4>
-                          <p className="mt-1 text-sm text-slate-600">
-                            顧客: {getClientName(project.clientId)}
-                          </p>
-                        </div>
-
-                        <span
-                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getStatusClassName(
-                            project.status
-                          )}`}
-                        >
-                          {getStatusLabel(project.status)}
-                        </span>
-                      </div>
-
-                      <div className="grid gap-3 md:grid-cols-2">
-                        <div>
-                          <p className="text-xs font-bold tracking-wide text-slate-500">
-                            納期
-                          </p>
-                          <p className="text-slate-800">
-                            {formatDate(project.dueDate)}
-                          </p>
-                        </div>
-
-                        <div>
-                          <p className="text-xs font-bold tracking-wide text-slate-500">
-                            最終金額
-                          </p>
-                          <p className="text-slate-800">
-                            {formatAmount(project.finalAmount)}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
 
-          <div className="rounded-3xl bg-white p-6 shadow-sm ring-1 ring-slate-200">
-            <div className="mb-5">
-              <h3 className="text-2xl font-bold text-slate-900">最近の進捗履歴</h3>
-              <p className="mt-2 text-sm text-slate-600">
-                案件ごとの最新の動きを時系列で確認できます。
-              </p>
-            </div>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">ステータス内訳</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              現在登録されている見積の状態別件数です。
+            </p>
 
-            {recentUpdates.length === 0 ? (
-              <p className="text-slate-600">進捗履歴はまだありません。</p>
-            ) : (
-              <div className="space-y-4">
-                {recentUpdates.map((update) => (
+            <div className="mt-5 space-y-3">
+              {statusSummary.length === 0 ? (
+                <div className="text-sm text-slate-500">見積データがありません。</div>
+              ) : (
+                statusSummary.map(([status, count]) => (
                   <div
-                    key={`${update.projectId}-${update.id}`}
-                    className="rounded-3xl border border-slate-200 bg-slate-50 p-4"
+                    key={status}
+                    className="flex items-center justify-between rounded-xl border border-slate-200 px-4 py-3"
                   >
-                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <h4 className="text-lg font-bold text-slate-900">
-                          {update.projectTitle}
-                        </h4>
-                        <p className="mt-1 text-sm text-slate-600">
-                          顧客: {update.clientName}
-                        </p>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span
-                          className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${getUpdateTypeClassName(
-                            update.type
-                          )}`}
-                        >
-                          {getUpdateTypeLabel(update.type)}
-                        </span>
-                        <span className="text-xs font-medium text-slate-500">
-                          {formatDateTime(update.createdAt)}
-                        </span>
-                      </div>
-                    </div>
-
-                    <p className="whitespace-pre-wrap text-slate-800">
-                      {update.body}
-                    </p>
+                    <span
+                      className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClass(
+                        status
+                      )}`}
+                    >
+                      {status}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-900">{count} 件</span>
                   </div>
-                ))}
-              </div>
-            )}
+                ))
+              )}
+            </div>
           </div>
-        </>
-      )}
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <h2 className="text-lg font-semibold text-slate-900">クイックアクション</h2>
+            <div className="mt-4 grid grid-cols-1 gap-3">
+              <Link
+                to="/quotes/new"
+                className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800"
+              >
+                新規見積を作成
+              </Link>
+              <Link
+                to="/quotes"
+                className="inline-flex items-center justify-center rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                物流見積一覧を確認
+              </Link>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
