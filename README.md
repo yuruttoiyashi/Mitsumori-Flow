@@ -2,7 +2,8 @@
 
 物流会社向けの見積管理システムです。  
 見積作成、保存、一覧管理、プレビュー、印刷、CSV一括取込までを一連の業務フローとして扱える、実務感を意識したポートフォリオアプリです。
-
+- Demo: https://mitsumori-flow-6s79.vercel.app
+- GitHub: https://github.com/yuruttoiyashi/Mitsumori-Flow
 ---
 
 ## 概要
